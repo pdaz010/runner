@@ -5,7 +5,9 @@ import os
 
 import git
 import httpx
+from dotenv import load_dotenv
 
+load_dotenv()
 # 配置日志记录
 # 添加时间格式
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
