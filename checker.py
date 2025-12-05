@@ -1,4 +1,5 @@
 # 检查github actions是否成功
+import asyncio
 import json
 import logging
 import os
@@ -9,8 +10,13 @@ from uuid import uuid4
 import git
 import httpx
 from dotenv import load_dotenv
+from redis.asyncio import ConnectionPool, Redis
 
 load_dotenv()
+REDISPASSWORD = os.environ.get('REDISPASSWORD', '')
+REDISURL = os.environ.get('REDISURL', '')
+
+
 # 配置日志记录
 # 添加时间格式
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -30,10 +36,27 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
 REPO_LIST = [repo.split('|') for repo in os.environ.get('REPO_LIST', '').split(',')]
 
 
+async def get_key_len(rk):
+    pool = ConnectionPool.from_url(REDISURL)
+    r: Redis = await Redis(connection_pool=pool, password=REDISPASSWORD)
+    return await r.llen(rk)
+
+
 def main():
+    worker_tasks_nums = 50
+    rk = 'insurance:tasks:company_tasks_action'
+    length = asyncio.run(get_key_len(rk))
+    logger.info(f'队列{rk}长度为{length}')
     logger.info('检查github actions')
+    if length == 0:
+        logger.info('队列为空, 退出')
+        return
+    tasks_per_worker = length // worker_tasks_nums
+    logger.info(f'需要worker数量 {tasks_per_worker}')
     nochange = 0
     for name, repo in REPO_LIST:
+        if tasks_per_worker == 0:
+            break
         url = f'https://api.github.com/repos/{repo}/actions/runs?per_page=1"'
         headers = {'Authorization': f'token {GITHUB_TOKEN}', 'Accept': 'application/vnd.github.v3+json'}
         res = httpx.get(url, headers=headers)
@@ -62,6 +85,8 @@ def main():
                         nochange = 1
                     # 推送
                     git.Repo('.').remote(name).push(force=True)
+                    tasks_per_worker -= 1
+                    logger.info(f'仓库 {repo} Actions重新触发成功, 剩余wroker数 {tasks_per_worker}')
         except Exception as e:
             logger.error(f'仓库 {repo} 检查Actions状态时出错: {e}')
             continue
